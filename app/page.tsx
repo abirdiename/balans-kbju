@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 type Nutrition = { calories: number; protein: number; fat: number; carbs: number };
 type Entry = Nutrition & { id: number; name: string; meal: string; createdAt: string };
 type DayData = { goals: Nutrition; entries: Entry[] };
+type SavedFood = Nutrition & { name: string };
 
 const DEFAULT_GOALS: Nutrition = { calories: 2100, protein: 120, fat: 70, carbs: 240 };
 const EMPTY_FOOD = { name: "", meal: "Завтрак", calories: "", protein: "", fat: "", carbs: "" };
@@ -35,6 +36,8 @@ export default function Home() {
   const [data, setData] = useState<DayData>({ goals: DEFAULT_GOALS, entries: [] });
   const [food, setFood] = useState(EMPTY_FOOD);
   const [goalDraft, setGoalDraft] = useState(DEFAULT_GOALS);
+  const [savedFoods, setSavedFoods] = useState<SavedFood[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [showGoals, setShowGoals] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -44,11 +47,19 @@ export default function Home() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`/api/day?clientId=${encodeURIComponent(getClientId())}&date=${selectedDate}`);
+      const clientId = getClientId();
+      const [response, savedFoodsResponse] = await Promise.all([
+        fetch(`/api/day?clientId=${encodeURIComponent(clientId)}&date=${selectedDate}`),
+        fetch(`/api/entries?clientId=${encodeURIComponent(clientId)}`),
+      ]);
       if (!response.ok) throw new Error("Не удалось загрузить день");
       const next = (await response.json()) as DayData;
       setData(next);
       setGoalDraft(next.goals);
+      if (savedFoodsResponse.ok) {
+        const history = await savedFoodsResponse.json() as { foods: SavedFood[] };
+        setSavedFoods(history.foods);
+      }
     } catch {
       setError("Не получилось связаться с хранилищем. Попробуйте обновить страницу.");
     } finally {
@@ -68,31 +79,71 @@ export default function Home() {
   const changeDate = (days: number) => {
     const next = new Date(`${date}T12:00:00`);
     next.setDate(next.getDate() + days);
+    setEditingId(null);
+    setFood(EMPTY_FOOD);
     setDate(isoDate(next));
   };
 
-  const addFood = async (event: FormEvent) => {
+  const goToToday = () => {
+    setEditingId(null);
+    setFood(EMPTY_FOOD);
+    setDate(isoDate());
+  };
+
+  const rememberFood = (entry: Entry) => {
+    const saved = { name: entry.name, calories: entry.calories, protein: entry.protein, fat: entry.fat, carbs: entry.carbs };
+    const key = entry.name.trim().toLocaleLowerCase("ru-RU");
+    setSavedFoods((current) => [saved, ...current.filter((item) => item.name.trim().toLocaleLowerCase("ru-RU") !== key)].slice(0, 200));
+  };
+
+  const saveFood = async (event: FormEvent) => {
     event.preventDefault();
     if (!food.name.trim() || !food.calories) return;
     setSaving(true);
     setError("");
     try {
       const response = await fetch("/api/entries", {
-        method: "POST",
+        method: editingId === null ? "POST" : "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: getClientId(), date, ...food }),
+        body: JSON.stringify({ id: editingId, clientId: getClientId(), date, ...food }),
       });
       if (!response.ok) throw new Error();
       const { entry } = await response.json();
-      setData((current) => ({ ...current, entries: [...current.entries, entry] }));
+      setData((current) => ({ ...current, entries: editingId === null ? [...current.entries, entry] : current.entries.map((item) => item.id === editingId ? entry : item) }));
+      rememberFood(entry);
+      setEditingId(null);
       setFood({ ...EMPTY_FOOD, meal: food.meal });
-    } catch { setError("Не удалось сохранить приём пищи."); }
+    } catch { setError(editingId === null ? "Не удалось сохранить приём пищи." : "Не удалось сохранить изменения."); }
     finally { setSaving(false); }
+  };
+
+  const editEntry = (entry: Entry) => {
+    setEditingId(entry.id);
+    setFood({ name: entry.name, meal: entry.meal, calories: String(entry.calories), protein: String(entry.protein), fat: String(entry.fat), carbs: String(entry.carbs) });
+    setError("");
+    requestAnimationFrame(() => {
+      document.getElementById("food-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.getElementById("food-name")?.focus();
+    });
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setFood({ ...EMPTY_FOOD, meal: food.meal });
+  };
+
+  const changeFoodName = (name: string) => {
+    const match = savedFoods.find((item) => item.name.trim().toLocaleLowerCase("ru-RU") === name.trim().toLocaleLowerCase("ru-RU"));
+    setFood((current) => match ? { ...current, name, calories: String(match.calories), protein: String(match.protein), fat: String(match.fat), carbs: String(match.carbs) } : { ...current, name });
   };
 
   const deleteEntry = async (id: number) => {
     const previous = data.entries;
     setData((current) => ({ ...current, entries: current.entries.filter((entry) => entry.id !== id) }));
+    if (editingId === id) {
+      setEditingId(null);
+      setFood(EMPTY_FOOD);
+    }
     const response = await fetch(`/api/entries?id=${id}&clientId=${encodeURIComponent(getClientId())}`, { method: "DELETE" });
     if (!response.ok) {
       setData((current) => ({ ...current, entries: previous }));
@@ -134,7 +185,7 @@ export default function Home() {
           </div>
           <div className="date-picker" aria-label="Выбор дня">
             <button onClick={() => changeDate(-1)} aria-label="Предыдущий день">←</button>
-            <button className="date-label" onClick={() => setDate(isoDate())}>{displayDate}</button>
+            <button className="date-label" onClick={goToToday}>{displayDate}</button>
             <button onClick={() => changeDate(1)} aria-label="Следующий день">→</button>
           </div>
         </div>
@@ -165,25 +216,32 @@ export default function Home() {
 
         <div className="content-grid">
           <section className="panel add-panel">
-            <div className="panel-title"><div><p className="eyebrow">Новая запись</p><h2>Что вы ели?</h2></div><span className="plus">+</span></div>
-            <form onSubmit={addFood}>
-              <label>Название продукта или блюда<input autoFocus value={food.name} onChange={(e) => setFood({ ...food, name: e.target.value })} placeholder="Например, творог с ягодами" required /></label>
+            <div className="panel-title"><div><p className="eyebrow">{editingId === null ? "Новая запись" : "Редактирование"}</p><h2>{editingId === null ? "Что вы ели?" : "Исправить запись"}</h2></div><span className="plus">{editingId === null ? "+" : "✎"}</span></div>
+            <form id="food-form" onSubmit={saveFood}>
+              <label>Название продукта или блюда<input id="food-name" list="saved-foods" autoFocus value={food.name} onChange={(e) => changeFoodName(e.target.value)} placeholder="Начните вводить название" autoComplete="off" required /></label>
+              <datalist id="saved-foods">{savedFoods.map((item) => <option key={item.name.toLocaleLowerCase("ru-RU")} value={item.name}>{item.calories} ккал · Б {item.protein} · Ж {item.fat} · У {item.carbs}</option>)}</datalist>
               <label>Приём пищи<select value={food.meal} onChange={(e) => setFood({ ...food, meal: e.target.value })}><option>Завтрак</option><option>Обед</option><option>Ужин</option><option>Перекус</option></select></label>
               <div className="macro-inputs">
                 {nutrients.map((item) => <label key={item.key}>{item.label}<span><input inputMode="decimal" type="number" min="0" step="0.1" placeholder="0" value={food[item.key]} onChange={(e) => setFood({ ...food, [item.key]: e.target.value })} required={item.key === "calories"} />{item.unit}</span></label>)}
               </div>
-              <button className="primary" disabled={saving}>{saving ? "Сохраняю…" : "Добавить в дневник"}</button>
+              <div className="form-actions">
+                <button className="primary" disabled={saving}>{saving ? "Сохраняю…" : editingId === null ? "Добавить в дневник" : "Сохранить изменения"}</button>
+                {editingId !== null && <button className="secondary" type="button" onClick={cancelEditing}>Отмена</button>}
+              </div>
             </form>
           </section>
 
           <section className="panel diary-panel">
             <div className="panel-title"><div><p className="eyebrow">За день</p><h2>Ваш рацион</h2></div><span className="count">{data.entries.length}</span></div>
             {data.entries.length === 0 && !loading ? <div className="empty"><span>◒</span><h3>Пока здесь пусто</h3><p>Добавьте первый приём пищи — итоги пересчитаются сразу.</p></div> :
-              <div className="entries">{data.entries.map((entry) => <article className="entry" key={entry.id}>
+              <div className="entries">{data.entries.map((entry) => <article className={`entry ${editingId === entry.id ? "editing" : ""}`} key={entry.id}>
                 <div className="meal-mark">{entry.meal.slice(0, 1)}</div>
                 <div className="entry-main"><small>{entry.meal}</small><h3>{entry.name}</h3><p>Б {entry.protein} · Ж {entry.fat} · У {entry.carbs}</p></div>
                 <strong>{entry.calories}<small> ккал</small></strong>
-                <button className="delete" onClick={() => deleteEntry(entry.id)} aria-label={`Удалить ${entry.name}`}>×</button>
+                <div className="entry-actions">
+                  <button className="edit" onClick={() => editEntry(entry)} aria-label={`Редактировать ${entry.name}`}>✎</button>
+                  <button className="delete" onClick={() => deleteEntry(entry.id)} aria-label={`Удалить ${entry.name}`}>×</button>
+                </div>
               </article>)}</div>}
           </section>
         </div>
