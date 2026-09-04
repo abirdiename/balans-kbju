@@ -145,7 +145,7 @@ export default function Home() {
           <div className="summary-heading">
             <div><p className="eyebrow">Итоги дня</p><h2>{loading ? "Загружаем…" : totals.calories === 0 ? "Начнём с первого приёма пищи" : "Вы на верном пути"}</h2></div>
             <div className={`status ${totals.calories > data.goals.calories ? "over" : ""}`}>
-              {totals.calories > data.goals.calories ? "Перебор" : "Осталось"} <strong>{Math.abs(data.goals.calories - totals.calories)} ккал</strong>
+              {totals.calories > data.goals.calories ? "Перебор" : "Осталось"} <strong>{Math.round(Math.abs(data.goals.calories - totals.calories))} ккал</strong>
             </div>
           </div>
           <div className="nutrient-grid">
@@ -154,9 +154,10 @@ export default function Home() {
               const goal = data.goals[item.key];
               const percent = goal ? Math.round((eaten / goal) * 100) : 0;
               const diff = goal - eaten;
+              const roundedDiff = Math.round(Math.abs(diff));
               return <article className="nutrient" key={item.key} style={{ "--accent": item.color } as React.CSSProperties}>
                 <div className="ring" style={{ "--progress": `${Math.min(percent, 100) * 3.6}deg` } as React.CSSProperties}><span>{percent}%</span></div>
-                <div className="nutrient-copy"><h3>{item.label}</h3><p><strong>{eaten}</strong> / {goal} {item.unit}</p><small className={diff < 0 ? "negative" : ""}>{diff < 0 ? `Перебор ${Math.abs(diff)}` : `Ещё ${diff}`} {item.unit}</small></div>
+                <div className="nutrient-copy"><h3>{item.label}</h3><p><strong>{eaten}</strong> / {goal} {item.unit}</p><small className={diff < 0 ? "negative" : ""}>{diff < 0 ? `Перебор ${roundedDiff}` : `Ещё ${roundedDiff}`} {item.unit}</small></div>
               </article>;
             })}
           </div>
